@@ -16,7 +16,7 @@ knitr::opts_chunk$set(
 
 ## Overview
 
-The goal of szKendall is to measure the dissimilarity between two single cells based on their observed Hi-C data, accounting for the discrepancies in structural zero positions. This rank-based dissimilarity measure can be powerful for single-cell Hi-C clustering and other downstream analyses. The calculation is implemented using Rcpp for speed and supports parallel computation via `foreach` and `doParallel` packages.
+The goal of szKendall is to measure the dissimilarity between two single cells based on Hi-C data, accounting for the discrepancies in structural zero positions. This rank-based dissimilarity measure can be powerful for single-cell Hi-C clustering and other downstream analyses. The calculation is implemented using Rcpp for speed and supports parallel computation via `foreach` and `doParallel` packages.
 
 ## Installation
 
@@ -50,28 +50,6 @@ registerDoParallel(cores = 4)
 # foreach::registerDoSEQ()
 ```
 
-
-## Example: Calculating szKendall Dissimilarity and Perform Clustering
-
-This is an example which shows you how to calculate the szKendall dissimilarity between cells. The simulated data contain 150 single cells (i.e., 150 columns). Therefore, the resulting szKendall matrix (which is symmetric with the main-diagonal all being 0) is of dimension 150 by 150. The $(i, j)^{th}$ element in this matrix indicates the szKendall dissimilarity between cell $i$ and cell $j$. 
-
-```{r example}
-# Simulated data (or real, observed count data)
-data("sim1.data")
-# Underlying expected count
-# (where only structural zeros are exactly zeros; all other positions have positive values)
-data("true1.data") 
-
-# DOs are imputed
-contacts <- sim1.data
-contacts[true1.data!=0] <- true1.data[true1.data!=0]
-
-# Calculate szKendall and szkendall1 dissimilarity
-szK  <- szKendall(contacts=contacts,dist.method="szKendall")
-szK1  <- szKendall(contacts=contacts,dist.method="szKendall")
-```
-
-
 The `szKendall()` function supports three input formats:
 
 1. A **\#LP × \#cells** numeric matrix 
@@ -81,18 +59,40 @@ The `szKendall()` function supports three input formats:
 3. A **3D array** of dimension **\#LP X \#LP X \#cells**, where each slice corresponds to a symmetric Hi-C count matrix.
 
 The argument `dist.method` specifies the weighting scheme and accepts either  
-`"szKendall"` or `"szKendall1"`.See `?szKendall` for further details.
+`"szKendall"` or `"szKendall1"`.  
+
+See `?szKendall` for further details.
+
+## Example: Calculating szKendall Dissimilarity and Perform Clustering
+
+This is an example which shows you how to calculate the szKendall dissimilarity between cells, where contact is a built-in data input in the third format supported by the package.
+If `heatmap = TRUE`, the function will automatically generate heatmaps of the resulting distance matrix. The default setting is FALSE.
+
+```{r, fig.width=12, fig.height=4}
+szK  <- szKendall(contacts=contacts,dist.method="szKendall",heatmap=TRUE)
+```
 
 
-The szKendall package also provides different functions for visualizing the dissimilarity matrix: Heatmap (`scHiC_hm_dist()`), t-SNE two-dimensional projection (`scHiC_tSNE_dist()`), and UMAP two-dimensional projection (`scHiC_UMAP_dist()`). 
+```{r}
+szK1 <- szKendall(contacts=contacts,dist.method="szKendall1")
+```
 
+
+`scHiC_hm_dist()` also provides convenient visualization tools for the dissimilarity matrices.
+
+```{r viz-heatmap, fig.width=12, fig.height=4}
+par(mfrow=c(1,3))
+scHiC_hm_dist(szK1[[1]]) # szKendall(1)
+
+```
+
+
+The `szKendall` package additionally offers 2D visualization tools, such as t-SNE (`scHiC_tSNE_dist()`) and UMAP (`scHiC_UMAP_dist()`) projections of the dissimilarity matrix.
 
 ```{r viz-2dscatter, fig.width=5, fig.height=5}
 # Specify the true cell labels
 n_single <- 50
 cell.type <- factor(c(rep(1,n_single), rep(2,n_single), rep(3,n_single)), levels=c("1", "2", "3"))
-#Heatmap
-scHiC_hm_dist(szK[[1]]) # szKendall
 
 # t-SNE 2D projection
 scHiC_tSNE_dist(szK[[1]], cell_type=cell.type, seed=1234, title="szK", alpha_value=1)
@@ -101,7 +101,9 @@ scHiC_tSNE_dist(szK[[1]], cell_type=cell.type, seed=1234, title="szK", alpha_val
 scHiC_UMAP_dist(szK[[1]], cell_type=cell.type, seed=1234, main="szK", alpha_value=1)
 ```
 
-Using a dissimilarity matrix (Euclidean, szKendall, or others), we can perform clustering and measure the clustering results using the four criterion values (ARI, WSS%, ASW, and MIS). Below is an example of performing K-means, PAM, & hierarchical clustering based on the Euclidean distance on the simulated data, and performing PAM & hierarchical clustering based on the szKendall dissimilarity. 
+## Computing four assessment criteria
+
+We can assess clustering performance using four criterion values (ARI, WSS%, ASW, and MIS). Below is an example.
 
 ```{r clustering}
 suppressWarnings({
@@ -111,49 +113,8 @@ suppressWarnings({
   })
 })
 
-euclid.sim1 <- as.matrix(dist(t(scale(sim1.data))))
-rownames(euclid.sim1) <- NULL 
-colnames(euclid.sim1) <- NULL 
 
-#------------------------------------- K-means --------------------------------------------------------
-
-##  Perform K-means clustering on the simulated data (which is based on Euclidean distance)  ## 
-
-set.seed(1234)
-km1 <- kmeans(t(scale(sim1.data)), centers=3, nstart=10, iter.max=100, algorithm="Hartigan-Wong")
-
-# ARI (adjusted rand index)
-ARI(cell.type, km1$cluster)  
-
-# WSS% (within-cluster sum of squares percentage)
-# The 'WSS_percentage_kmeans()' function is designed specifically for "kmeans" object, 
-# and the returned WSS% value should be identical to the one returned by 'WSS_percentage()' function. 
-WSS_percentage_kmeans(km1)
-WSS_percentage(km1$cluster, euclid.sim1)
-
-# ASW (average silhouette width)
-ASW(km1$cluster, euclid.sim1)
-
-# MIS (minimum isolation score)
-MIS(km1$cluster, euclid.sim1)
-
-#--------------------------------------- PAM ----------------------------------------------------------
-
-##  Perform PAM clustering on the simulated data (which is based on Euclidean distance)  ## 
-set.seed(1234)
-pam1 <- pam(euclid.sim1, k=3, nstart=10, diss=TRUE)
-# ARI 
-ARI(cell.type, pam1$clustering)  
-# WSS% 
-WSS_percentage(pam1$clustering, euclid.sim1)
-# ASW 
-# (the ASW extracted from 'pam1$silinfo$avg.width' should be identical to the one returned by 'ASW' function.)  
-ASW(pam1$clustering, euclid.sim1)
-pam1$silinfo$avg.width
-# MIS 
-MIS(pam1$clustering, euclid.sim1)
-
-##  Perform PAM clustering on the simulated data + true SZ information (which is based on szKendall)  ## 
+##  Perform PAM clustering for number of cluster from 1 to 10 and plot the results 
 set.seed(1234)
 pam2 <- pam(szK[[1]], k=3, nstart=10, diss=TRUE)
 # ARI 
@@ -167,36 +128,6 @@ pam2$silinfo$avg.width
 # MIS 
 MIS(pam2$clustering, szK[[1]])
 
-#------------------------------------ Hierarchical ----------------------------------------------------
-
-##  Perform Hierarchical clustering on the simulated data (which is based on Euclidean distance)  ## 
-set.seed(1234)
-hclust1 <- hcut(as.dist(euclid.sim1), hc_func="hclust", hc_method="complete", k = 3, isdiss = TRUE)
-# ARI 
-ARI(cell.type, hclust1$cluster)  
-# WSS% 
-WSS_percentage(hclust1$cluster, euclid.sim1)
-# ASW 
-# (the ASW extracted from 'hclust1$silinfo$avg.width' should be identical to the one returned by 'ASW' function.) 
-ASW(hclust1$cluster, euclid.sim1)
-hclust1$silinfo$avg.width
-# MIS 
-MIS(hclust1$cluster, euclid.sim1)
-
-##  Perform Hierarchical clustering on the simulated data + true SZ information (which is based on szKendall)  ## 
-set.seed(1234)
-hclust2 <- hcut(as.dist(szK[[1]]), hc_func="hclust", hc_method="complete", k = 3, isdiss = TRUE)
-# ARI 
-ARI(cell.type, hclust2$cluster)  
-# WSS% 
-WSS_percentage(hclust2$cluster, szK[[1]])
-# ASW 
-# (the ASW extracted from 'hclust2$silinfo$avg.width' should be identical to the one returned by 'ASW' function.) 
-ASW(hclust2$cluster, szK[[1]])
-hclust2$silinfo$avg.width
-# MIS 
-MIS(hclust2$cluster, szK[[1]])
-```
 
 
 ## Simulate single-cell Hi-C Data 
